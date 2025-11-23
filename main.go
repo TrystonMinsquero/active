@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vallerion/rscanner"
 	flag "github.com/spf13/pflag"
+	"github.com/vallerion/rscanner"
 )
 
 func handle(err error, context string, args ...any) {
@@ -39,13 +39,14 @@ func parsePath(path string) string {
 }
 
 func main() {
-	cache_path := parsePath(cacheFileName)
+	cachePath := parsePath(cacheFileName)
 
 	list := flag.UintP("list", "l", 0, "Will list out the most recent paths.")
 	flag.Lookup("list").NoOptDefVal = "10"
 	prevHelp := `Will get the n-th previous path. 
 Using -n or --n where n is a number will also work.`
 	prev := flag.UintP("previous", "p", 0, prevHelp)
+	printCache := flag.BoolP("cache", "c", false, "Will print path to the cache")
 
 	if flag.NArg() > 2 {
 		handle(fmt.Errorf("Too many arguments: %v", flag.NArg()), "")
@@ -68,12 +69,18 @@ Using -n or --n where n is a number will also work.`
 
 	flag.Parse()
 
-	cache, err := os.OpenFile(cache_path, os.O_CREATE|os.O_RDWR, 0644)
-	handle(err, "Failed to get or create cache at '%s'", cache_path)
+	if printCache != nil && *printCache {
+		fmt.Print(cachePath)
+		os.Exit(4)
+		return
+	}
+
+	cache, err := os.OpenFile(cachePath, os.O_CREATE|os.O_RDWR, 0644)
+	handle(err, "Failed to get or create cache at '%s'", cachePath)
 	cacheStat, err := cache.Stat()
 	handle(err, "Failed to stat cache")
 
-	getlastLine := func(num uint) string {
+	getLastLine := func(num uint) string {
 		bscanner := rscanner.NewScanner(cache, cacheStat.Size())
 		var lastLine []byte
 		i := uint(0)
@@ -91,7 +98,7 @@ Using -n or --n where n is a number will also work.`
 		return strings.TrimSpace(string(lastLine))
 	}
 
-	getlastLines := func(num uint) []string {
+	getLastLines := func(num uint) []string {
 		bscanner := rscanner.NewScanner(cache, cacheStat.Size())
 		lastLines := make([]string, 0, num)
 		if num == 0 {
@@ -114,19 +121,64 @@ Using -n or --n where n is a number will also work.`
 		return lastLines
 	}
 
+	getDigits := func(num uint) int {
+		if num == 0 {
+			return 1 // Special case for 0, which has one digit
+		}
+		count := 0
+		for num != 0 {
+			num /= 10
+			count++
+		}
+		return count
+	}
+
+	getLineFormat := func(maxNum uint) string {
+		digits := getDigits(maxNum)
+		return "%" + strconv.Itoa(digits) + "d: %s\n"
+	}
+
+	// Handle list flag
 	if list != nil && *list > 0 {
-		for i, line := range getlastLines(*list) {
-			fmt.Printf("%d: %s\n", i, line)
+		lineFormat := getLineFormat(*list)
+		for i, line := range getLastLines(*list) {
+			fmt.Printf(lineFormat, i, line)
 		}
 		return
 	}
 
-	if flag.NArg() == 0 {
-		fmt.Println(getlastLine(*prev))
+	doFuzzyList := func() {
+		defer os.Exit(3)
+
+		lines := getLastLines(100)
+		lineCount := uint(len(lines))
+		if lineCount <= 0 {
+			return
+		}
+
+		seen := map[string]struct{}{}
+		for _, line := range lines {
+			_, wasSeen := seen[line]
+			if wasSeen {
+				continue
+			}
+			fmt.Println(line)
+			seen[line] = struct{}{}
+		}
+	}
+
+	if flag.NArg() == 0 { // Handle no arg
+		fmt.Println(getLastLine(*prev))
 		return
-	} else {
-		arg := parsePath(flag.Arg(0))
+	} else { // Handle 1 arg
+		arg := flag.Arg(0)
+		arg = parsePath(arg)
 		_, err = os.Stat(arg)
+		if err != nil {
+			doFuzzyList()
+			return
+		}
+
 		handle(err, "Path is not a file or directory: %s", arg)
 		cache.Seek(0, io.SeekEnd)
 		_, err = cache.WriteString(arg + "\n")
