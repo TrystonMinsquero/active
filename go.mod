@@ -1,4 +1,4 @@
-module active
+module github.com/TrystonMinsquero/active
 
 go 1.25.3
 
